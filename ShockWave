@@ -1,0 +1,327 @@
+-- language: Luau, executor: Delta, target: Roblox Mobile
+-- shockwave blast with full touch UI, no keyboard required
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- config
+local cfg = {
+    power      = 280,
+    upward     = 60,
+    radius     = 999,
+    cooldown   = 0.08,
+    continuous = false,
+}
+
+local lastFire = 0
+local blasting = false
+
+-- util
+local function tween(obj, t, props)
+    TweenService:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props):Play()
+end
+
+local function corner(r, parent)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r)
+    c.Parent = parent
+    return c
+end
+
+local function make(class, props, parent)
+    local i = Instance.new(class)
+    for k, v in pairs(props) do
+        pcall(function() i[k] = v end)
+    end
+    i.Parent = parent
+    return i
+end
+
+-- mount
+local gui = make("ScreenGui", {
+    Name = "ShockwaveUI",
+    ResetOnSpawn = false,
+    IgnoreGuiInset = true,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    DisplayOrder = 999,
+}, nil)
+
+do
+    local ok = false
+    if typeof(gethui) == "function" then
+        ok = pcall(function() gui.Parent = gethui() end)
+    end
+    if not ok then
+        ok = pcall(function() gui.Parent = game:GetService("CoreGui") end)
+    end
+    if not ok then
+        gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    end
+end
+
+-- panel
+local panel = make("Frame", {
+    AnchorPoint = Vector2.new(0.5, 1),
+    Position    = UDim2.new(0.5, 0, 1, -24),
+    Size        = UDim2.fromOffset(320, 200),
+    BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+    BorderSizePixel  = 0,
+}, gui)
+corner(16, panel)
+make("UIStroke", {
+    Color = Color3.fromRGB(255,255,255),
+    Transparency = 0.82,
+    ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+}, panel)
+
+-- drag
+do
+    local dragging, ds, dp = false, nil, nil
+    panel.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            dragging, ds, dp = true, input.Position, panel.Position
+        end
+    end)
+    panel.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.Touch then
+            local d = input.Position - ds
+            panel.Position = UDim2.new(
+                dp.X.Scale, dp.X.Offset + d.X,
+                dp.Y.Scale, dp.Y.Offset + d.Y
+            )
+        end
+    end)
+end
+
+-- title
+make("TextLabel", {
+    AnchorPoint = Vector2.new(0.5, 0),
+    Position    = UDim2.fromScale(0.5, 0),
+    Size        = UDim2.new(1, 0, 0, 38),
+    BackgroundTransparency = 1,
+    Text        = "SHOCKWAVE",
+    Font        = Enum.Font.GothamBold,
+    TextSize    = 15,
+    TextColor3  = Color3.fromRGB(255, 255, 255),
+}, panel)
+
+-- power label
+local powerLabel = make("TextLabel", {
+    AnchorPoint = Vector2.new(0, 0),
+    Position    = UDim2.fromOffset(18, 42),
+    Size        = UDim2.fromOffset(200, 22),
+    BackgroundTransparency = 1,
+    Text        = "Power: 280",
+    Font        = Enum.Font.Gotham,
+    TextSize    = 13,
+    TextColor3  = Color3.fromRGB(180, 180, 180),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, panel)
+
+-- slider track
+local track = make("Frame", {
+    Position = UDim2.new(0, 18, 0, 68),
+    Size     = UDim2.new(1, -36, 0, 6),
+    BackgroundColor3 = Color3.fromRGB(45, 45, 45),
+    BorderSizePixel  = 0,
+}, panel)
+corner(3, track)
+
+local fill = make("Frame", {
+    Size = UDim2.fromScale(0.28, 1),
+    BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+    BorderSizePixel  = 0,
+}, track)
+corner(3, fill)
+
+local knob = make("Frame", {
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position    = UDim2.fromScale(0.28, 0.5),
+    Size        = UDim2.fromOffset(18, 18),
+    BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+    BorderSizePixel  = 0,
+}, track)
+corner(9, knob)
+
+-- slider logic
+local minP, maxP = 50, 800
+local function setPower(scale)
+    scale = math.clamp(scale, 0, 1)
+    cfg.power = math.floor(minP + (maxP - minP) * scale)
+    powerLabel.Text = "Power: " .. cfg.power
+    fill.Size = UDim2.fromScale(scale, 1)
+    knob.Position = UDim2.fromScale(scale, 0.5)
+end
+setPower(0.28)
+
+local sliding = false
+local function slideFromInput(input)
+    local rel = (input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
+    setPower(rel)
+end
+
+track.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch then
+        sliding = true
+        slideFromInput(input)
+    end
+end)
+track.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch then
+        sliding = false
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if sliding and input.UserInputType == Enum.UserInputType.Touch then
+        slideFromInput(input)
+    end
+end)
+
+-- continuous toggle
+local contOn = false
+
+local contTrack = make("Frame", {
+    Position = UDim2.new(0, 18, 0, 100),
+    Size     = UDim2.fromOffset(44, 24),
+    BackgroundColor3 = Color3.fromRGB(45, 45, 45),
+    BorderSizePixel  = 0,
+}, panel)
+corner(12, contTrack)
+
+local contThumb = make("Frame", {
+    AnchorPoint = Vector2.new(0, 0.5),
+    Position    = UDim2.new(0, 3, 0.5, 0),
+    Size        = UDim2.fromOffset(18, 18),
+    BackgroundColor3 = Color3.fromRGB(160, 160, 160),
+    BorderSizePixel  = 0,
+}, contTrack)
+corner(9, contThumb)
+
+local contLabel = make("TextLabel", {
+    AnchorPoint = Vector2.new(0, 0.5),
+    Position    = UDim2.new(0, 54, 0.5, 0),
+    Size        = UDim2.fromOffset(160, 24),
+    BackgroundTransparency = 1,
+    Text        = "Continuous (hold blast)",
+    Font        = Enum.Font.Gotham,
+    TextSize    = 13,
+    TextColor3  = Color3.fromRGB(160, 160, 160),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, panel)
+contLabel.Parent = panel
+contLabel.Position = UDim2.new(0, 72, 0, 100)
+
+contTrack.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch then
+        contOn = not contOn
+        cfg.continuous = contOn
+        tween(contThumb, 0.2, {
+            Position = contOn
+                and UDim2.new(1, -21, 0.5, 0)
+                or  UDim2.new(0,   3, 0.5, 0),
+            BackgroundColor3 = contOn
+                and Color3.fromRGB(255, 255, 255)
+                or  Color3.fromRGB(160, 160, 160),
+        })
+        tween(contTrack, 0.2, {
+            BackgroundColor3 = contOn
+                and Color3.fromRGB(80, 80, 80)
+                or  Color3.fromRGB(45, 45, 45),
+        })
+    end
+end)
+
+-- blast button
+local blastBtn = make("TextButton", {
+    AnchorPoint = Vector2.new(0.5, 1),
+    Position    = UDim2.new(0.5, 0, 1, -14),
+    Size        = UDim2.new(1, -36, 0, 44),
+    BackgroundColor3 = Color3.fromRGB(38, 38, 38),
+    BorderSizePixel  = 0,
+    Text        = "BLAST",
+    Font        = Enum.Font.GothamBold,
+    TextSize    = 16,
+    TextColor3  = Color3.fromRGB(255, 255, 255),
+    AutoButtonColor = false,
+}, panel)
+corner(10, blastBtn)
+make("UIStroke", {
+    Color = Color3.fromRGB(255,255,255),
+    Transparency = 0.78,
+}, blastBtn)
+
+-- blast logic
+local function blast()
+    local now = os.clock()
+    if now - lastFire < cfg.cooldown then return end
+    lastFire = now
+
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local origin = root.Position
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        local c = player.Character
+        if not c then continue end
+        local hrp = c:FindFirstChild("HumanoidRootPart")
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then continue end
+
+        local dist = (hrp.Position - origin).Magnitude
+        if dist > cfg.radius then continue end
+
+        local falloff = 1 - (dist / cfg.radius) * 0.4
+        local dir = (hrp.Position - origin)
+        if dir.Magnitude < 0.1 then
+            dir = Vector3.new(math.random()-0.5, 0, math.random()-0.5)
+        end
+        dir = dir.Unit
+
+        hum.Sit = false
+        hrp.AssemblyLinearVelocity = Vector3.new(
+            dir.X * cfg.power * falloff,
+            cfg.upward * falloff + cfg.power * 0.18,
+            dir.Z * cfg.power * falloff
+        )
+    end
+end
+
+-- button press feedback + hold
+local holding = false
+
+blastBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch then
+        holding = true
+        tween(blastBtn, 0.08, {BackgroundColor3 = Color3.fromRGB(70, 70, 70)})
+        if not cfg.continuous then
+            blast()
+        end
+    end
+end)
+
+blastBtn.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch then
+        holding = false
+        tween(blastBtn, 0.2, {BackgroundColor3 = Color3.fromRGB(38, 38, 38)})
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if holding and cfg.continuous and blasting == false then
+        blast()
+    end
+end)
+
+print("[Shockwave] ready")
