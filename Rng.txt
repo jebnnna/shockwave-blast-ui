@@ -1,0 +1,433 @@
+-- ╔══════════════════════════════════════════════════════╗
+-- ║           VANTA RNG — Delta Executor (Lv7+)          ║
+-- ║  Auto-detect remotes · Best card · Mobile GUI drag   ║
+-- ╚══════════════════════════════════════════════════════╝
+-- language: LuaU | executor: Delta 7+ | target: Any Roblox RNG game
+
+local Players    = game:GetService("Players")
+local RS         = game:GetService("ReplicatedStorage")
+local lp         = Players.LocalPlayer
+local PlayerGui  = lp:WaitForChild("PlayerGui")
+
+-- ─── CONFIG (edit if needed) ──────────────────────────────────────────────────
+local CFG = {
+    ROLL_DELAY    = 0.15,   -- seconds between each auto-roll (lower = faster risk kick)
+    -- keywords used to auto-detect which remote is the roll remote
+    ROLL_KEYS     = {"roll","spin","open","pull","gacha","summon","draw","case","crate","luck","rng","egg","hatch"},
+    -- keywords used to detect if a result is rare
+    RARE_WORDS    = {
+        secret=100, divine=90, godly=80, mythic=70, legendary=60,
+        ultra=50, exclusive=45, unique=40, special=35, rare=30,
+        epic=25, uncommon=15,
+    },
+}
+
+-- ─── STATE ────────────────────────────────────────────────────────────────────
+local S = {
+    autoRoll    = false,
+    hooked      = false,
+    remote      = nil,
+    remoteClass = nil,
+    bestCard    = "None",
+    bestScore   = 0,
+    rollCount   = 0,
+    hitCount    = 0,
+}
+
+-- ─── CLEANUP OLD GUI ──────────────────────────────────────────────────────────
+if PlayerGui:FindFirstChild("VANTA_RNG") then
+    PlayerGui:FindFirstChild("VANTA_RNG"):Destroy()
+end
+
+-- ─── SCREEN GUI ───────────────────────────────────────────────────────────────
+local SG = Instance.new("ScreenGui")
+SG.Name              = "VANTA_RNG"
+SG.ResetOnSpawn      = false
+SG.ZIndexBehavior    = Enum.ZIndexBehavior.Sibling
+SG.Parent            = PlayerGui
+
+-- Main window
+local Win = Instance.new("Frame")
+Win.Name                = "Win"
+Win.Size                = UDim2.new(0, 320, 0, 430)
+Win.Position            = UDim2.new(0.5, -160, 0.5, -215)
+Win.BackgroundColor3    = Color3.fromRGB(12, 12, 18)
+Win.BorderSizePixel     = 0
+Win.Parent              = SG
+Instance.new("UICorner", Win).CornerRadius = UDim.new(0, 12)
+local ws = Instance.new("UIStroke", Win)
+ws.Color     = Color3.fromRGB(90, 60, 200)
+ws.Thickness = 1.5
+
+-- ── Title bar ─────────────────────────────────────────────────────────────────
+local TBar = Instance.new("Frame")
+TBar.Size               = UDim2.new(1, 0, 0, 42)
+TBar.BackgroundColor3   = Color3.fromRGB(28, 18, 55)
+TBar.BorderSizePixel    = 0
+TBar.Parent             = Win
+Instance.new("UICorner", TBar).CornerRadius = UDim.new(0, 12)
+
+local TLabel = Instance.new("TextLabel")
+TLabel.Size                 = UDim2.new(1, -14, 1, 0)
+TLabel.Position             = UDim2.new(0, 14, 0, 0)
+TLabel.BackgroundTransparency = 1
+TLabel.Text                 = "⚡  VANTA RNG"
+TLabel.TextColor3           = Color3.fromRGB(175, 140, 255)
+TLabel.TextSize             = 17
+TLabel.Font                 = Enum.Font.GothamBold
+TLabel.TextXAlignment       = Enum.TextXAlignment.Left
+TLabel.Parent               = TBar
+
+-- ── Status row ────────────────────────────────────────────────────────────────
+local SDot = Instance.new("Frame")
+SDot.Size               = UDim2.new(0, 11, 0, 11)
+SDot.Position           = UDim2.new(0, 14, 0, 54)
+SDot.BackgroundColor3   = Color3.fromRGB(90, 90, 90)
+SDot.BorderSizePixel    = 0
+SDot.Parent             = Win
+Instance.new("UICorner", SDot).CornerRadius = UDim.new(1, 0)
+
+local STxt = Instance.new("TextLabel")
+STxt.Size                   = UDim2.new(1, -36, 0, 22)
+STxt.Position               = UDim2.new(0, 32, 0, 48)
+STxt.BackgroundTransparency = 1
+STxt.Text                   = "Not tested — tap Test Game first"
+STxt.TextColor3             = Color3.fromRGB(170, 170, 170)
+STxt.TextSize               = 12
+STxt.Font                   = Enum.Font.Gotham
+STxt.TextXAlignment         = Enum.TextXAlignment.Left
+STxt.Parent                 = Win
+
+-- ── Best card strip ───────────────────────────────────────────────────────────
+local BF = Instance.new("Frame")
+BF.Size                 = UDim2.new(1, -20, 0, 36)
+BF.Position             = UDim2.new(0, 10, 0, 78)
+BF.BackgroundColor3     = Color3.fromRGB(22, 16, 42)
+BF.BorderSizePixel      = 0
+BF.Parent               = Win
+Instance.new("UICorner", BF).CornerRadius = UDim.new(0, 8)
+
+local BLbl = Instance.new("TextLabel")
+BLbl.Size                   = UDim2.new(1, -12, 1, 0)
+BLbl.Position               = UDim2.new(0, 10, 0, 0)
+BLbl.BackgroundTransparency = 1
+BLbl.Text                   = "🏆  Best: None"
+BLbl.TextColor3             = Color3.fromRGB(255, 210, 0)
+BLbl.TextSize               = 13
+BLbl.Font                   = Enum.Font.GothamBold
+BLbl.TextXAlignment         = Enum.TextXAlignment.Left
+BLbl.TextTruncate           = Enum.TextTruncate.AtEnd
+BLbl.Parent                 = BF
+
+-- ── Log box ───────────────────────────────────────────────────────────────────
+local LogWrap = Instance.new("Frame")
+LogWrap.Size               = UDim2.new(1, -20, 0, 140)
+LogWrap.Position           = UDim2.new(0, 10, 0, 124)
+LogWrap.BackgroundColor3   = Color3.fromRGB(8, 8, 14)
+LogWrap.BorderSizePixel    = 0
+LogWrap.Parent             = Win
+Instance.new("UICorner", LogWrap).CornerRadius = UDim.new(0, 8)
+local lws = Instance.new("UIStroke", LogWrap)
+lws.Color = Color3.fromRGB(45, 35, 90)
+
+local LogSF = Instance.new("ScrollingFrame")
+LogSF.Size                   = UDim2.new(1, -6, 1, -6)
+LogSF.Position               = UDim2.new(0, 3, 0, 3)
+LogSF.BackgroundTransparency = 1
+LogSF.BorderSizePixel        = 0
+LogSF.ScrollBarThickness     = 3
+LogSF.ScrollBarImageColor3   = Color3.fromRGB(90, 70, 190)
+LogSF.CanvasSize             = UDim2.new(0, 0, 0, 0)
+LogSF.AutomaticCanvasSize    = Enum.AutomaticSize.Y
+LogSF.Parent                 = LogWrap
+local ll = Instance.new("UIListLayout", LogSF)
+ll.Padding = UDim.new(0, 2)
+
+-- ── Roll counter ──────────────────────────────────────────────────────────────
+local RollCnt = Instance.new("TextLabel")
+RollCnt.Size                    = UDim2.new(1, -20, 0, 22)
+RollCnt.Position                = UDim2.new(0, 10, 0, 273)
+RollCnt.BackgroundTransparency  = 1
+RollCnt.Text                    = "Rolls: 0   |   Rare Hits: 0"
+RollCnt.TextColor3              = Color3.fromRGB(130, 130, 160)
+RollCnt.TextSize                = 12
+RollCnt.Font                    = Enum.Font.Gotham
+RollCnt.Parent                  = Win
+
+-- ─── HELPERS ──────────────────────────────────────────────────────────────────
+local function setStatus(txt, r, g, b)
+    STxt.Text = txt
+    SDot.BackgroundColor3 = Color3.fromRGB(r, g, b)
+end
+
+local function updateCount()
+    RollCnt.Text = "Rolls: " .. S.rollCount .. "   |   Rare Hits: " .. S.hitCount
+end
+
+local function log(txt, r, g, b)
+    r, g, b = r or 190, g or 190, b or 190
+    local e = Instance.new("TextLabel")
+    e.Size                   = UDim2.new(1, -6, 0, 0)
+    e.AutomaticSize          = Enum.AutomaticSize.Y
+    e.BackgroundTransparency = 1
+    e.Text                   = txt
+    e.TextColor3             = Color3.fromRGB(r, g, b)
+    e.TextSize               = 11
+    e.Font                   = Enum.Font.Code
+    e.TextXAlignment         = Enum.TextXAlignment.Left
+    e.TextWrapped            = true
+    e.Parent                 = LogSF
+    task.defer(function()
+        LogSF.CanvasPosition = Vector2.new(0, LogSF.AbsoluteCanvasSize.Y)
+    end)
+    -- cap at 50 entries
+    local kids = LogSF:GetChildren()
+    if #kids > 52 then
+        for i = 1, #kids - 50 do
+            if kids[i]:IsA("TextLabel") then kids[i]:Destroy() end
+        end
+    end
+end
+
+local function checkRare(str)
+    local low = str:lower()
+    local bestW, bestS = nil, 0
+    for word, score in pairs(CFG.RARE_WORDS) do
+        if low:find(word) and score > bestS then
+            bestW, bestS = word, score
+        end
+    end
+    return bestW, bestS
+end
+
+local function processResult(...)
+    local parts = {...}
+    local combined = ""
+    for _, v in ipairs(parts) do
+        combined = combined .. tostring(v) .. " "
+    end
+    combined = combined:gsub("^%s+", ""):gsub("%s+$", "")
+    if combined == "" then return end
+
+    local word, score = checkRare(combined)
+    if word then
+        S.hitCount = S.hitCount + 1
+        updateCount()
+        local display = combined:sub(1, 55)
+        log("★ " .. display, 255, 210, 0)
+        if score > S.bestScore then
+            S.bestScore  = score
+            S.bestCard   = display
+            BLbl.Text    = "🏆  Best: " .. display
+        end
+    else
+        log("› " .. combined:sub(1, 55), 155, 155, 175)
+    end
+end
+
+-- ─── BUTTON FACTORY ───────────────────────────────────────────────────────────
+local function btn(text, x, y, w, cr, cg, cb)
+    local b = Instance.new("TextButton")
+    b.Size                = UDim2.new(0, w, 0, 40)
+    b.Position            = UDim2.new(0, x, 0, y)
+    b.BackgroundColor3    = Color3.fromRGB(cr, cg, cb)
+    b.BorderSizePixel     = 0
+    b.Text                = text
+    b.TextColor3          = Color3.fromRGB(255, 255, 255)
+    b.TextSize            = 13
+    b.Font                = Enum.Font.GothamBold
+    b.AutoButtonColor     = false
+    b.Parent              = Win
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    -- press feedback
+    b.MouseButton1Down:Connect(function() b.BackgroundColor3 = Color3.fromRGB(cr-20,cg-20,cb-20) end)
+    b.MouseButton1Up:Connect(function()   b.BackgroundColor3 = Color3.fromRGB(cr,cg,cb)          end)
+    return b
+end
+
+-- Row 1  y=302
+local BtnTest  = btn("🔍  Test Game",    10, 302, 145,  35,  70, 155)
+local BtnHook  = btn("🎲  Hook RNG",    165, 302, 145,  75,  35, 120)
+-- Row 2  y=350
+local BtnRoll  = btn("▶  Auto Roll",    10, 350, 145,  35, 115,  55)
+local BtnClear = btn("🗑  Clear",       165, 350, 145,  110, 35,  35)
+
+-- ─── DRAG (touch + mouse) ─────────────────────────────────────────────────────
+do
+    local dragging, dStart, wStart
+    TBar.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch
+        or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dStart   = i.Position
+            wStart   = Win.Position
+        end
+    end)
+    TBar.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.Touch
+        or i.UserInputType == Enum.UserInputType.MouseMove) then
+            local d = i.Position - dStart
+            Win.Position = UDim2.new(
+                wStart.X.Scale, wStart.X.Offset + d.X,
+                wStart.Y.Scale, wStart.Y.Offset + d.Y)
+        end
+    end)
+    TBar.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch
+        or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+end
+
+-- ─── TEST GAME ────────────────────────────────────────────────────────────────
+BtnTest.MouseButton1Click:Connect(function()
+    setStatus("Scanning game…", 255, 200, 0)
+    log("── Scanning for remotes ──", 100, 140, 255)
+    task.wait(0.05)
+
+    local matched = {}
+    local allFound = {}
+
+    local function scan(parent)
+        for _, obj in ipairs(parent:GetDescendants()) do
+            if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+                table.insert(allFound, obj)
+                local n = obj.Name:lower()
+                for _, kw in ipairs(CFG.ROLL_KEYS) do
+                    if n:find(kw) then
+                        table.insert(matched, obj)
+                        break
+                    end
+                end
+            end
+        end
+    end
+    scan(RS)
+    scan(game.Workspace)
+
+    log("Total remotes in game: " .. #allFound, 170, 170, 170)
+
+    if #matched > 0 then
+        -- best match picked automatically
+        S.remote      = matched[1]
+        S.remoteClass = matched[1].ClassName
+        setStatus("✓ Compatible! Remote: " .. matched[1].Name, 55, 215, 75)
+        log("✓ Roll remote: " .. matched[1].Name .. " [" .. matched[1].ClassName .. "]", 60, 220, 100)
+        for i = 2, math.min(#matched, 5) do
+            log("  alt: " .. matched[i].Name, 130, 200, 130)
+        end
+        -- hook result listener
+        if matched[1]:IsA("RemoteEvent") then
+            matched[1].OnClientEvent:Connect(function(...)
+                processResult(...)
+            end)
+            log("  Result listener attached.", 120, 120, 160)
+        end
+    elseif #allFound > 0 then
+        setStatus("⚠  Remotes exist, no match", 255, 155, 0)
+        log("⚠ No roll keyword matched. All remotes:", 255, 160, 60)
+        for i, r in ipairs(allFound) do
+            if i > 15 then
+                log("  … and " .. (#allFound - 15) .. " more", 140, 140, 140)
+                break
+            end
+            log("  [" .. i .. "] " .. r.Name .. " (" .. r.ClassName .. ")", 200, 200, 200)
+        end
+        log("→ Auto Roll will try remote [1]: " .. allFound[1].Name, 200, 180, 100)
+        S.remote      = allFound[1]
+        S.remoteClass = allFound[1].ClassName
+        if allFound[1]:IsA("RemoteEvent") then
+            allFound[1].OnClientEvent:Connect(function(...)
+                processResult(...)
+            end)
+        end
+    else
+        setStatus("✗  No remotes found", 215, 55, 55)
+        log("✗ No RemoteEvents found in this game.", 215, 75, 75)
+        log("  Game may use 100% local RNG — Hook RNG still works.", 155, 155, 155)
+    end
+end)
+
+-- ─── HOOK RNG ─────────────────────────────────────────────────────────────────
+BtnHook.MouseButton1Click:Connect(function()
+    if S.hooked then
+        log("math.random already hooked.", 160, 160, 160)
+        return
+    end
+    local _orig = math.random
+    math.random = function(a, b)
+        if a and b then
+            return b          -- integer range → always max (best outcome)
+        elseif a then
+            return a
+        else
+            return 0.99999    -- float call → near 1.0
+        end
+    end
+    S.hooked = true
+    BtnHook.BackgroundColor3 = Color3.fromRGB(35, 110, 35)
+    BtnHook.Text = "✓  RNG Hooked"
+    log("✓ math.random hooked → max forced", 90, 215, 90)
+    log("  Only affects LOCAL RNG — server rolls unaffected.", 130, 130, 150)
+end)
+
+-- ─── AUTO ROLL ────────────────────────────────────────────────────────────────
+BtnRoll.MouseButton1Click:Connect(function()
+    S.autoRoll = not S.autoRoll
+
+    if S.autoRoll then
+        BtnRoll.BackgroundColor3 = Color3.fromRGB(155, 50, 35)
+        BtnRoll.Text             = "⏸  Stop Roll"
+        log("── Auto-roll ON ──", 90, 215, 90)
+
+        if not S.remote then
+            log("⚠ No remote detected yet — run Test Game first.", 255, 160, 50)
+            log("  Will keep trying every roll tick.", 160, 160, 160)
+        end
+
+        task.spawn(function()
+            while S.autoRoll do
+                if S.remote then
+                    pcall(function()
+                        if S.remoteClass == "RemoteEvent" then
+                            S.remote:FireServer()
+                        else
+                            S.remote:InvokeServer()
+                        end
+                    end)
+                    S.rollCount = S.rollCount + 1
+                    updateCount()
+                else
+                    -- remote not found yet, keep retrying scan silently
+                    local r = RS:FindFirstChildWhichIsA("RemoteEvent", true)
+                    if r then S.remote = r S.remoteClass = r.ClassName end
+                end
+                task.wait(CFG.ROLL_DELAY)
+            end
+        end)
+    else
+        BtnRoll.BackgroundColor3 = Color3.fromRGB(35, 115, 55)
+        BtnRoll.Text             = "▶  Auto Roll"
+        log("── Auto-roll OFF — total rolls: " .. S.rollCount .. " ──", 190, 190, 190)
+    end
+end)
+
+-- ─── CLEAR ────────────────────────────────────────────────────────────────────
+BtnClear.MouseButton1Click:Connect(function()
+    for _, v in ipairs(LogSF:GetChildren()) do
+        if v:IsA("TextLabel") then v:Destroy() end
+    end
+    S.rollCount  = 0
+    S.hitCount   = 0
+    S.bestCard   = "None"
+    S.bestScore  = 0
+    BLbl.Text    = "🏆  Best: None"
+    updateCount()
+    log("── Cleared ──", 110, 110, 130)
+end)
+
+-- ─── READY ────────────────────────────────────────────────────────────────────
+log("VANTA RNG ready.", 160, 120, 255)
+log("Step 1 → Test Game   Step 2 → Hook RNG   Step 3 → Auto Roll", 140, 140, 160)
+log("Drag title bar to move the window.", 110, 110, 130)
